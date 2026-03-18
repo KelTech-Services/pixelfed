@@ -1,12 +1,11 @@
 name: Build & Push Docker Image
 
 on:
-  # Rebuild when we push to dev (manual sync or upstream merge)
+  # Rebuild when we push to dev or tag a release
   push:
     branches: [dev]
-  # Rebuild on new tags
-  tags:
-    - 'v*'
+    tags:
+      - 'v*'
   # Check upstream daily at 6 AM UTC (11 PM PDT)
   schedule:
     - cron: '0 6 * * *'
