@@ -36,6 +36,10 @@ RUN install-php-extensions \
     vips \
     ffi
 
+# Copy entrypoint scripts
+COPY worker-entrypoint.sh /worker-entrypoint.sh
+RUN chmod +x /worker-entrypoint.sh
+
 # Copy application files
 COPY --chown=www-data:www-data . /var/www/html
 
