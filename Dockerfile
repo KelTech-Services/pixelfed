@@ -31,6 +31,7 @@ RUN install-php-extensions \
     xml \
     zip \
     pdo_mysql \
+    pdo_pgsql \
     redis \
     vips \
     ffi
