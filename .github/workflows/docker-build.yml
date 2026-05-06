@@ -43,18 +43,22 @@ jobs:
           LOCAL_SHA=$(git rev-parse HEAD)
           UPSTREAM_SHA=$(git rev-parse upstream/dev)
           
-          if [ "$LOCAL_SHA" = "$UPSTREAM_SHA" ]; then
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" "$LOCAL_SHA"; then
             echo "Already up to date."
             echo "updated=false" >> $GITHUB_OUTPUT
+            echo "build_sha=$LOCAL_SHA" >> $GITHUB_OUTPUT
           else
             echo "New upstream changes detected, merging..."
             git merge upstream/dev --no-edit
+            BUILD_SHA=$(git rev-parse HEAD)
             git push origin dev --tags
             echo "updated=true" >> $GITHUB_OUTPUT
+            echo "build_sha=$BUILD_SHA" >> $GITHUB_OUTPUT
           fi
 
     outputs:
       updated: ${{ steps.sync.outputs.updated }}
+      build_sha: ${{ steps.sync.outputs.build_sha }}
 
   build:
     runs-on: ubuntu-latest
@@ -69,6 +73,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'schedule' && needs.sync-upstream.outputs.build_sha || github.sha }}
+
+      - name: Determine image tag
+        id: image-tag
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -88,7 +98,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
-            type=sha,prefix=
+            type=raw,value=${{ steps.image-tag.outputs.sha_short }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
