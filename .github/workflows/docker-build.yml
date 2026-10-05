@@ -39,10 +39,10 @@ jobs:
         run: |
           git remote add upstream https://github.com/pixelfed/pixelfed.git || true
           git fetch upstream dev --tags
-          
+
           LOCAL_SHA=$(git rev-parse HEAD)
           UPSTREAM_SHA=$(git rev-parse upstream/dev)
-          
+
           if git merge-base --is-ancestor "$UPSTREAM_SHA" "$LOCAL_SHA"; then
             echo "Already up to date."
             echo "updated=false" >> $GITHUB_OUTPUT
@@ -100,13 +100,40 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=${{ steps.image-tag.outputs.sha_short }}
 
-      - name: Build and push
+      - name: Build candidate
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
+          file: Dockerfile.keltech
+          push: false
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
+
+      - name: Validate candidate runtime
+        env:
+          IMAGE: ghcr.io/keltech-services/pixelfed:${{ steps.image-tag.outputs.sha_short }}
+        run: |
+          docker image inspect "$IMAGE" --format '{{.Os}}/{{.Architecture}}' | grep -qx 'linux/amd64'
+          docker run --rm --network none --entrypoint php "$IMAGE" -r '
+            require "vendor/autoload.php";
+            foreach (["pdo_pgsql", "redis", "intl", "ffi", "imagick", "gd"] as $ext) {
+              if (!extension_loaded($ext)) { throw new RuntimeException("Missing extension: " . $ext); }
+            }
+            $im = Jcupitt\Vips\Image::black(16, 16);
+            $im->writeToBuffer(".avif");
+            $im->writeToBuffer(".jxl");
+            echo "KelTech runtime checks passed\n";
+          '
+          docker run --rm --network none --entrypoint php "$IMAGE" artisan --version
+
+      - name: Publish verified image
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            docker push "$tag"
+          done <<< "$IMAGE_TAGS"

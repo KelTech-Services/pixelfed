@@ -12,9 +12,6 @@ return [
 
     'discover' => [
         'public' => env('INSTANCE_DISCOVER_PUBLIC', false),
-        'loops' => [
-            'enabled' => env('EXP_LOOPS', false),
-        ],
         'tags' => [
             'is_public' => env('INSTANCE_PUBLIC_HASHTAGS', false),
         ],
@@ -38,6 +35,11 @@ return [
             'cached' => env('PF_NETWORK_TIMELINE') ? env('INSTANCE_NETWORK_TIMELINE_CACHED', false) : false,
             'cache_dropoff' => env('INSTANCE_NETWORK_TIMELINE_CACHE_DROPOFF', 100),
             'max_hours_old' => env('INSTANCE_NETWORK_TIMELINE_CACHE_MAX_HOUR_INGEST', 2160),
+        ],
+
+        'tag' => [
+            'max_pages' => env('PF_INSTANCE_TIMELINE_TAG_MAX_PAGES', 10),
+            'cursor_ttl' => env('PF_INSTANCE_TIMELINE_TAG_CURSOR_TTL', 3600),
         ],
     ],
 
@@ -77,18 +79,7 @@ return [
     'oauth' => [
         'token_expiration' => env('OAUTH_TOKEN_DAYS', 365),
         'refresh_expiration' => env('OAUTH_REFRESH_DAYS', 400),
-        'pat' => [
-            'enabled' => env('OAUTH_PAT_ENABLED', false),
-            'id' => env('OAUTH_PAT_ID'),
-        ],
-    ],
-
-    'label' => [
-        'covid' => [
-            'enabled' => env('ENABLE_COVID_LABEL', true),
-            'url' => env('COVID_LABEL_URL', 'https://www.who.int/emergencies/diseases/novel-coronavirus-2019/advice-for-public'),
-            'org' => env('COVID_LABEL_ORG', 'visit the WHO website'),
-        ],
+        'pat_enabled' => env('OAUTH_PAT_ENABLED', false),
     ],
 
     'enable_cc' => env('ENABLE_CONFIG_CACHE', true),
@@ -101,10 +92,6 @@ return [
     ],
 
     'hide_nsfw_on_public_feeds' => env('PF_HIDE_NSFW_ON_PUBLIC_FEEDS', false),
-
-    'avatar' => [
-        'local_to_cloud' => env('PF_LOCAL_AVATAR_TO_CLOUD', false),
-    ],
 
     'admin_invites' => [
         'enabled' => env('PF_ADMIN_INVITES_ENABLED', true),
@@ -164,8 +151,6 @@ return [
         'enabled' => env('INSTANCE_CUR_REG', false),
 
         'resend_confirmation_limit' => env('INSTANCE_CUR_REG_RESEND_LIMIT', 5),
-
-        'captcha_enabled' => env('INSTANCE_CUR_REG_CAPTCHA', env('CAPTCHA_ENABLED', false)),
 
         'state' => [
             'fallback_on_closed_reg' => true,

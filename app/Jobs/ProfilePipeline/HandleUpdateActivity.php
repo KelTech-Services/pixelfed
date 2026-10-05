@@ -3,15 +3,15 @@
 namespace App\Jobs\ProfilePipeline;
 
 use App\Jobs\AvatarPipeline\RemoteAvatarFetchFromUrl;
-use App\Profile;
+use App\Models\Profile;
 use App\Services\SanitizeService;
 use App\Util\Lexer\Autolink;
-use Cache;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Purify;
 
@@ -82,7 +82,10 @@ class HandleUpdateActivity implements ShouldQueue
         }
 
         if ($profile->name !== $payload['object']['name']) {
-            $profile->name = Purify::clean(substr($payload['object']['name'], 0, config('pixelfed.max_name_length')));
+            $profile->name = htmlspecialchars_decode(
+                Purify::clean(substr($payload['object']['name'], 0, config('pixelfed.max_name_length'))),
+                ENT_QUOTES | ENT_HTML5
+            );
         }
 
         if ($profile->isDirty()) {

@@ -4,39 +4,83 @@ namespace App\Services;
 
 use App\Util\ActivityPub\Helpers;
 use App\Util\ActivityPub\HttpSignature;
-use Cache;
-use GuzzleHttp\Psr7\Uri as GuzzleUri;
-use GuzzleHttp\Psr7\UriResolver;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use League\Uri\BaseUri;
 use Psr\Http\Message\ResponseInterface;
 
 class ActivityPubFetchService
 {
     const CACHE_KEY = 'pf:services:apfetchs:';
 
-    private const MAX_REDIRECTS = 2;
+    private const int MAX_REDIRECTS = 2;
 
     private const MAX_RESPONSE_SIZE = 2 * 1024 * 1024;
 
+    /**
+     * Statuses worth another attempt later. Everything else in the 4xx
+     * range (401, 403, 404, 410...) is the remote telling us no.
+     */
+    private const array TRANSIENT_STATUSES = [408, 425, 429];
+
+    /**
+     * Whether the most recent failed fetch in this process looked temporary
+     * (timeout, connection error, DNS, 5xx, 429) rather than permanent.
+     * Null when the last fetch did not fail.
+     */
+    private static ?bool $lastFailureTransient = null;
+
+    /**
+     * True when the fetch that just returned nothing failed in a way that
+     * is likely to work if tried again later. Only meaningful right after
+     * a call to get() or fetchRequest() came back empty.
+     */
+    public static function lastFailureWasTransient(): bool
+    {
+        return self::$lastFailureTransient === true;
+    }
+
+    private static function isTransientStatus(int $status): bool
+    {
+        return $status >= 500 || in_array($status, self::TRANSIENT_STATUSES, true);
+    }
+
+    /**
+     * Record why a fetch failed. Always returns null so call sites can
+     * `return self::failed(...)`.
+     */
+    private static function failed(bool $transient): null
+    {
+        self::$lastFailureTransient = $transient;
+
+        return null;
+    }
+
     public static function get($url, $validateUrl = true)
     {
+        self::$lastFailureTransient = null;
+
         $url = Helpers::validateUrl($url);
 
         if (! $url) {
+            self::failed(false);
+
             return false;
         }
 
         $host = parse_url($url, PHP_URL_HOST);
 
         if (! $host) {
+            self::failed(false);
+
             return false;
         }
 
         $domainKey = base64_encode(strtolower($host));
         $urlKey = hash('sha256', $url);
-        $key = self::CACHE_KEY . $domainKey . ':' . $urlKey;
+        $key = self::CACHE_KEY.$domainKey.':'.$urlKey;
 
         return Cache::remember($key, 450, function () use ($url) {
             return self::fetchRequest($url);
@@ -50,26 +94,30 @@ class ActivityPubFetchService
 
     public static function fetchRequest($url, $returnJsonFormat = false)
     {
+        self::$lastFailureTransient = null;
+
         $currentUrl = $url;
 
         for ($redirects = 0; $redirects <= self::MAX_REDIRECTS; $redirects++) {
             $currentUrl = Helpers::validateUrl($currentUrl);
 
             if (! $currentUrl) {
-                return;
+                return self::failed(false);
             }
 
             $host = parse_url($currentUrl, PHP_URL_HOST);
             $port = parse_url($currentUrl, PHP_URL_PORT) ?: 443;
 
             if (! $host) {
-                return;
+                return self::failed(false);
             }
 
             $ips = Helpers::resolvePublicIps($host);
 
-            if (empty($ips)) {
-                return;
+            if ($ips === []) {
+                // A host that just delivered to us but does not resolve is
+                // far more likely a DNS blip than a dead domain.
+                return self::failed(true);
             }
 
             $headers = self::signedHeaders($currentUrl);
@@ -111,28 +159,29 @@ class ActivityPubFetchService
                     ->retry(2, 250)
                     ->get($currentUrl);
             } catch (RequestException $e) {
-                return;
+                // retry() throws once its attempts are used up
+                return self::failed(self::isTransientStatus($e->response->status()));
             } catch (ConnectionException $e) {
-                return;
+                return self::failed(true);
             } catch (\Throwable $e) {
-                return;
+                return self::failed(false);
             }
 
             if (in_array($res->status(), [301, 302, 303, 307, 308], true)) {
                 if ($redirects >= self::MAX_REDIRECTS) {
-                    return;
+                    return self::failed(false);
                 }
 
                 $location = $res->header('Location');
 
                 if (! $location) {
-                    return;
+                    return self::failed(false);
                 }
 
                 $nextUrl = self::resolveRedirect($currentUrl, $location);
 
                 if (! $nextUrl) {
-                    return;
+                    return self::failed(false);
                 }
 
                 $currentUrl = $nextUrl;
@@ -141,11 +190,11 @@ class ActivityPubFetchService
             }
 
             if (! $res->ok()) {
-                return;
+                return self::failed(self::isTransientStatus($res->status()));
             }
 
             if (! self::hasValidContentType($res)) {
-                return;
+                return self::failed(false);
             }
 
             $body = $res->body();
@@ -154,7 +203,7 @@ class ActivityPubFetchService
                 $body === '' ||
                 strlen($body) > self::MAX_RESPONSE_SIZE
             ) {
-                return;
+                return self::failed(false);
             }
 
             if (! $returnJsonFormat) {
@@ -168,12 +217,11 @@ class ActivityPubFetchService
                     64,
                     JSON_THROW_ON_ERROR
                 );
-            } catch (\JsonException $e) {
-                return;
+            } catch (\JsonException) {
+                return self::failed(false);
             }
         }
 
-        return;
     }
 
     private static function signedHeaders(string $url): array
@@ -192,10 +240,10 @@ class ActivityPubFetchService
         $headers['Accept'] = 'application/activity+json';
 
         $headers['User-Agent'] =
-            'PixelFedBot/1.0.0 (Pixelfed/' .
-            config('pixelfed.version') .
-            '; +' .
-            config('app.url') .
+            'PixelFedBot/1.0.0 (Pixelfed/'.
+            config('pixelfed.version').
+            '; +'.
+            config('app.url').
             ')';
 
         return $headers;
@@ -208,11 +256,11 @@ class ActivityPubFetchService
     ): string {
         $addresses = array_map(function ($ip) {
             return str_contains($ip, ':')
-                ? '[' . $ip . ']'
+                ? '['.$ip.']'
                 : $ip;
         }, $ips);
 
-        return $host . ':' . $port . ':' . implode(',', $addresses);
+        return $host.':'.$port.':'.implode(',', $addresses);
     }
 
     private static function resolveRedirect(
@@ -229,17 +277,14 @@ class ActivityPubFetchService
         }
 
         try {
-            $resolved = UriResolver::resolve(
-                new GuzzleUri($baseUrl),
-                new GuzzleUri($location)
-            );
+            $resolved = BaseUri::from($baseUrl)->resolve($location);
 
             $url = (string) $resolved;
 
             return Helpers::validateUrl($url)
                 ? $url
                 : null;
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             return null;
         }
     }

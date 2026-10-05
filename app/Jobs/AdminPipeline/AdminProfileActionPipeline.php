@@ -2,14 +2,14 @@
 
 namespace App\Jobs\AdminPipeline;
 
-use App\Follower;
-use App\Instance;
 use App\Jobs\StatusPipeline\RemoteStatusDelete;
+use App\Models\Follower;
+use App\Models\Instance;
+use App\Models\Status;
 use App\Services\AccountService;
 use App\Services\ActivityPubFetchService;
 use App\Services\MediaStorageService;
 use App\Services\StatusService;
-use App\Status;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -48,13 +48,21 @@ class AdminProfileActionPipeline implements ShouldQueue
 
         switch ($action) {
             case 'mark-all-cw':
-                return $this->markAllPostsWithContentWarnings();
+                $this->markAllPostsWithContentWarnings();
+
+                return;
             case 'unlist-all':
-                return $this->unlistAllPosts();
+                $this->unlistAllPosts();
+
+                return;
             case 'purge':
-                return $this->purgeAllPosts();
+                $this->purgeAllPosts();
+
+                return;
             case 'refetch':
-                return $this->refetchAllPosts();
+                $this->refetchAllPosts();
+
+                return;
         }
     }
 

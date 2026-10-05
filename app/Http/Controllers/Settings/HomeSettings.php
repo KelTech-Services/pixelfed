@@ -2,35 +2,48 @@
 
 namespace App\Http\Controllers\Settings;
 
-use App\AccountLog;
-use App\EmailVerification;
 use App\Mail\PasswordChange;
-use App\Media;
+use App\Models\AccountLog;
+use App\Models\EmailVerification;
+use App\Models\Media;
+use App\Models\User;
 use App\Services\AccountService;
+use App\Services\EmailVerificationService;
 use App\Services\PronounService;
 use App\Util\Lexer\Autolink;
 use App\Util\Lexer\PrettyNumber;
-use Cache;
+use App\Util\Localization\Localization;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use Purify;
 
 trait HomeSettings
 {
-    public function home()
+    public function home(Request $request)
     {
-        $id = Auth::user()->profile_id;
+        $id = $request->user()->profile_id;
         $storage = [];
-        $used = Media::whereProfileId($id)->sum('size');
-        $storage['limit'] = config_cache('pixelfed.max_account_size') * 1024;
-        $storage['used'] = $used;
-        $storage['percentUsed'] = ceil($storage['used'] / $storage['limit'] * 100);
-        $storage['limitPretty'] = PrettyNumber::size($storage['limit']);
-        $storage['usedPretty'] = PrettyNumber::size($storage['used']);
+
+        // Only compute storage stats when account limits are enforced — the
+        // view renders this block behind the same guard. max_account_size can
+        // resolve to '' or 0 from .env, so cast to int and never divide by a
+        // non-positive limit (which threw DivisionByZeroError/TypeError and
+        // 500'd the settings page).
+        if (config_cache('pixelfed.enforce_account_limit')) {
+            $limit = (int) config_cache('pixelfed.max_account_size') * 1024;
+            $used = Media::whereProfileId($id)->sum('size');
+            $storage['limit'] = $limit;
+            $storage['used'] = $used;
+            $storage['percentUsed'] = $limit > 0 ? ceil($used / $limit * 100) : 0;
+            $storage['limitPretty'] = PrettyNumber::size($limit);
+            $storage['usedPretty'] = PrettyNumber::size($used);
+        }
+
         $pronouns = PronounService::get($id);
 
-        return view('settings.home', compact('storage', 'pronouns'));
+        return view('settings.home', ['storage' => $storage, 'pronouns' => $pronouns]);
     }
 
     public function homeUpdate(Request $request)
@@ -39,16 +52,19 @@ trait HomeSettings
             'name' => 'nullable|string|max:'.config('pixelfed.max_name_length'),
             'bio' => 'nullable|string|max:'.config('pixelfed.max_bio_length'),
             'website' => 'nullable|url',
-            'language' => 'nullable|string|min:2|max:5',
+            'language' => 'nullable|string|min:2|max:12',
             'pronouns' => 'nullable|array|max:4',
         ]);
 
         $changes = false;
-        $name = strip_tags(Purify::clean($request->input('name')));
+        $name = htmlspecialchars_decode(
+            strip_tags(Purify::clean($request->input('name'))),
+            ENT_QUOTES | ENT_HTML5
+        );
         $bio = $request->filled('bio') ? strip_tags(Purify::clean($request->input('bio'))) : null;
         $website = $request->input('website');
         $language = $request->input('language');
-        $user = Auth::user();
+        $user = $request->user();
         $profile = $user->profile;
         $pronouns = $request->input('pronouns');
         $existingPronouns = PronounService::get($profile->id);
@@ -78,7 +94,7 @@ trait HomeSettings
             }
 
             if ($user->language != $language &&
-                in_array($language, \App\Util\Localization\Localization::languages())
+                in_array($language, Localization::languages())
             ) {
                 $changes = true;
                 $user->language = $language;
@@ -128,7 +144,7 @@ trait HomeSettings
 
         $user = $request->user();
 
-        if (!password_verify($current, $user->password)) {
+        if (! password_verify($current, $user->password)) {
             return redirect()->back()->with('error', 'There was an error with your request! Please try again.');
         }
 
@@ -138,7 +154,7 @@ trait HomeSettings
         $log = new AccountLog;
         $log->user_id = $user->id;
         $log->item_id = $user->id;
-        $log->item_type = 'App\User';
+        $log->item_type = User::class;
         $log->action = 'account.edit.password';
         $log->message = $revokeSessions
             ? 'Password changed and all sessions revoked'
@@ -170,11 +186,13 @@ trait HomeSettings
     public function emailUpdate(Request $request)
     {
         $this->validate($request, [
-            'email' => 'required|email|unique:users,email',
+            // Ignore the user's own row so an unchanged (pre-filled) submission
+            // is a no-op; collisions with other accounts still fail.
+            'email' => 'required|email|unique:users,email,'.$request->user()->id,
         ]);
         $changes = false;
         $email = $request->input('email');
-        $user = Auth::user();
+        $user = $request->user();
         $profile = $user->profile;
 
         $validate = config_cache('pixelfed.enforce_email_verification');
@@ -193,7 +211,7 @@ trait HomeSettings
             $log = new AccountLog;
             $log->user_id = $user->id;
             $log->item_id = $user->id;
-            $log->item_type = 'App\User';
+            $log->item_type = User::class;
             $log->action = 'account.edit.email';
             $log->message = 'Email changed';
             $log->link = null;
@@ -207,11 +225,32 @@ trait HomeSettings
             $user->save();
             $profile->save();
 
+            if ($validate && is_null($user->email_verified_at)) {
+                EmailVerificationService::send($user);
+            }
+
             return redirect('/settings/email')->with('status', 'Email successfully updated!');
-        } else {
+        }
+
+        return redirect('/settings/email');
+
+    }
+
+    public function emailVerificationResend(Request $request)
+    {
+        $user = $request->user();
+
+        if (! is_null($user->email_verified_at)) {
             return redirect('/settings/email');
         }
 
+        if (! EmailVerificationService::send($user)) {
+            return redirect('/settings/email')->withErrors([
+                'email' => __('A verification email was sent a moment ago. Check your inbox, then try again in a minute.'),
+            ]);
+        }
+
+        return redirect('/settings/email')->with('status', __('Verification email sent to').' '.$user->email);
     }
 
     public function avatar()
