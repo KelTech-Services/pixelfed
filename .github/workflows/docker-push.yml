@@ -21,6 +21,8 @@ env:
 
 jobs:
   build:
+    # KelTech uses docker-build.yml and its FPM/PostgreSQL runtime.
+    if: github.repository == 'pixelfed/pixelfed'
     strategy:
       fail-fast: false
       matrix:

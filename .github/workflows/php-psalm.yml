@@ -1,7 +1,8 @@
 name: PHP - Psalm
 
 # Disabled for now.. too many errors
-on: []
+on:
+  workflow_dispatch:
 # on:
 #   push:
 #     branches: [staging, dev, unstable]

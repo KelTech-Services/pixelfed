@@ -253,7 +253,17 @@ RUN chown -R www-data:www-data /var/www/html \
     && find /var/www/html -type d -exec chmod 755 {} \; \
     && chmod -R ug+rwx /var/www/html/storage /var/www/html/bootstrap/cache
 
-RUN composer install --no-ansi --no-interaction --optimize-autoloader
+# Bootstrap artifacts belong to this image/container, never the legacy shared cache volume.
+ENV APP_CONFIG_CACHE=/var/www/html/bootstrap/image-cache/config.php \
+    APP_PACKAGES_CACHE=/var/www/html/bootstrap/image-cache/packages.php \
+    APP_SERVICES_CACHE=/var/www/html/bootstrap/image-cache/services.php \
+    APP_EVENTS_CACHE=/var/www/html/bootstrap/image-cache/events.php \
+    APP_ROUTES_CACHE=/var/www/html/bootstrap/image-cache/routes-v7.php
+
+RUN install -d -o www-data -g www-data -m 775 /var/www/html/bootstrap/image-cache
+
+RUN composer install --no-ansi --no-interaction --optimize-autoloader \
+    && chown -R www-data:www-data /var/www/html/bootstrap/image-cache
 
 # Smoke check 2
 RUN php -r '\

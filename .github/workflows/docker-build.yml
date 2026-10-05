@@ -130,6 +130,31 @@ jobs:
           '
           docker run --rm --network none --entrypoint php "$IMAGE" artisan --version
 
+      - name: Verify startup with stale legacy bootstrap cache
+        env:
+          IMAGE: ghcr.io/keltech-services/pixelfed:${{ steps.image-tag.outputs.sha_short }}
+        run: |
+          stale=$(mktemp -d)
+          chmod 755 "$stale"
+          for file in config.php packages.php services.php events.php routes-v7.php; do
+            echo '<?php throw new RuntimeException("Stale shared bootstrap cache was loaded");' > "$stale/$file"
+          done
+          docker run -d --name pixelfed-startup-test --network none \
+            -v "$stale:/var/www/html/bootstrap/cache:ro" \
+            -e AUTORUN_ENABLED=true -e AUTORUN_LARAVEL_MIGRATION=false \
+            -e APP_ENV=testing -e APP_KEY=base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+            "$IMAGE"
+          trap 'docker logs --tail 80 pixelfed-startup-test' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec pixelfed-startup-test curl -fsS http://localhost:8080/healthcheck >/dev/null; then
+              docker exec pixelfed-startup-test php artisan --version
+              exit 0
+            fi
+            test "$(docker inspect -f '{{.State.Running}}' pixelfed-startup-test)" = true
+            sleep 2
+          done
+          exit 1
+
       - name: Publish verified image
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
